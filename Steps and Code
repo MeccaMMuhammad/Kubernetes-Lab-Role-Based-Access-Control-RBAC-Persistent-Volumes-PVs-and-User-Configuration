@@ -1,0 +1,179 @@
+1. kubeconfig File Setup for User martin
+To configure user access for martin to the Kubernetes cluster, we modified the kubeconfig file. Ensure that certificates are not embedded directly in the kubeconfig file, but instead are referenced by path.
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: <your-ca-data-here>
+    server: https://controlplane:6443
+  name: kubernetes
+contexts:
+- context:
+    cluster: kubernetes
+    user: martin
+  name: developer
+- context:
+    cluster: kubernetes
+    user: kubernetes-admin
+  name: kubernetes-admin@kubernetes
+current-context: developer
+kind: Config
+preferences: {}
+users:
+- name: martin
+  user:
+    client-key: /root/martin.key
+    client-certificate: /root/martin.crt
+- name: kubernetes-admin
+  user:
+    client-certificate-data: <your-certificate-data-here>
+    client-key-data: <your-key-data-here>
+Commands Used:
+•	kubectl config view --raw - To view the current kubeconfig settings.
+•	kubectl config set-context developer --cluster=kubernetes --user=martin - To set the correct context for user martin.
+•	kubectl config use-context developer - To switch to the developer context.
+ 
+2. Creating RBAC: Role and RoleBinding
+We created a role called developer-role to grant full permissions to the resources in the development namespace.
+# developer-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: development
+  name: developer-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "persistentvolumeclaims"]
+  verbs: ["*"]
+Then, we created a RoleBinding to bind the developer-role to the user martin.
+# developer-rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer-rolebinding
+  namespace: development
+subjects:
+- kind: User
+  name: martin
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: developer-role
+  apiGroup: rbac.authorization.k8s.io
+Commands Used:
+•	kubectl apply -f developer-role.yaml - To apply the role.
+•	kubectl apply -f developer-rolebinding.yaml - To apply the rolebinding.
+ 
+3. Setting Up Persistent Volume (PV) and Persistent Volume Claim (PVC)
+We created a PersistentVolume and a PersistentVolumeClaim to allow the pod to persist its data.
+# jekyll-pv.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jekyll-site
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: local-storage
+  local:
+    path: /site
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - node01
+# jekyll-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jekyll-site
+  namespace: development
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-storage
+Commands Used:
+•	kubectl apply -f jekyll-pv.yaml - To create the PersistentVolume.
+•	kubectl apply -f jekyll-pvc.yaml - To create the PersistentVolumeClaim.
+•	kubectl get pv - To check if the PersistentVolume is created and available.
+•	kubectl get pvc -n development - To check if the PersistentVolumeClaim is created and bound to a PV.
+ 
+4. Pod Configuration (Jekyll)
+The jekyll pod is configured with an init container (copy-jekyll-site) to initialize the Jekyll site, and the main container (jekyll) serves the site.
+# jekyll-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: jekyll
+  labels:
+    run: jekyll
+  namespace: development
+spec:
+  volumes:
+    - name: site
+      persistentVolumeClaim:
+        claimName: jekyll-site
+  initContainers:
+    - name: copy-jekyll-site
+      image: gcr.io/kodekloud/customimage/jekyll
+      command: ["jekyll", "new", "/site"]
+      volumeMounts:
+        - name: site
+          mountPath: /site
+  containers:
+    - name: jekyll
+      image: gcr.io/kodekloud/customimage/jekyll-serve
+      volumeMounts:
+        - name: site
+          mountPath: /site
+Commands Used:
+•	kubectl apply -f jekyll-pod.yaml - To create the pod.
+ 
+5. Service Configuration for Jekyll
+We exposed the jekyll pod via a Kubernetes service.
+# jekyll-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: jekyll
+  namespace: development
+spec:
+  selector:
+    run: jekyll
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 4000
+    - protocol: TCP
+      port: 30097
+      nodePort: 30097
+  type: NodePort
+Commands Used:
+•	kubectl apply -f jekyll-service.yaml - To expose the Jekyll pod as a service.
+•	kubectl get svc -n development - To verify the service is created and get the details.
+ 
+6. Troubleshooting
+•	PVC Binding Issues: The pod was stuck in a Pending state because the PVC wasn’t bound to the PV. After verifying the PVC and PV configurations and ensuring the storageClassName matched, I was able to resolve the issue.
+o	Command Used: kubectl describe pvc jekyll-site -n development and kubectl describe pv jekyll-site.
+•	RBAC Permissions: Initially, martin did not have the necessary permissions. I fixed this by creating the appropriate Role and RoleBinding resources for martin in the development namespace.
+o	Command Used: kubectl auth can-i create pods -n development --as martin.
+ 
+How This Helps My Linux SysAdmin Journey
+This lab helped me significantly improve my Kubernetes and Linux systems administration skills. By working with Kubernetes users, namespaces, RBAC, and persistent storage, I deepened my understanding of:
+•	User and permissions management in Kubernetes
+•	Persistent storage and volume management
+•	Pod configuration and troubleshooting
+•	Networking in Kubernetes (services, ports, nodePorts)
+I look forward to building on these skills and continuing my journey as a Linux Systems Administrator.
+ 
+Conclusion
+This repository documents the steps and code I used to complete the Kubernetes lab. It's a great reference for anyone looking to learn about Kubernetes, RBAC, PVCs, and pod configuration in a hands-on way. I hope it serves as a helpful resource for my future learning and for others on a similar journey!
